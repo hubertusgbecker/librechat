@@ -23,17 +23,18 @@ services:
     volumes:
       - type: bind
         source: ./.env
-        target: /app/.env
-      - ./images:/app/client/public/images
-      - ./uploads:/app/uploads
-      - ./logs:/app/api/logs
+        target: /usr/local/apps/librechat/.env
+      - ./images:/usr/local/apps/librechat/client/public/images
+      - ./logs:/usr/local/apps/librechat/api/logs
+    env_file:
+      - .env
   mongodb:
     container_name: chat-mongodb
     image: mongo
     restart: always
     user: "${UID}:${GID}"
     volumes:
-      - ./data-node:/data/db
+      - /usr/local/apps/librechat/data-node:/data/db
     command: mongod --noauth
   meilisearch:
     container_name: chat-meilisearch
