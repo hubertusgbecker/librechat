@@ -27,6 +27,7 @@ services:
       - ./images:/app/client/public/images
       - ./uploads:/app/uploads
       - ./logs:/app/api/logs
+      - ./librechat.yaml:/app/librechat.yaml
   mongodb:
     container_name: chat-mongodb
     image: mongo
