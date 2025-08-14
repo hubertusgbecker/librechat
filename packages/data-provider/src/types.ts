@@ -1,4 +1,3 @@
-import type OpenAI from 'openai';
 import type { InfiniteData } from '@tanstack/react-query';
 import type {
   TBanner,
@@ -13,8 +12,6 @@ import type {
 import type { SettingDefinition } from './generate';
 import type { TMinimalFeedback } from './feedback';
 import type { Agent } from './types/assistants';
-
-export type TOpenAIMessage = OpenAI.Chat.ChatCompletionMessageParam;
 
 export * from './schemas';
 
@@ -43,6 +40,7 @@ export type TEndpointOption = Pick<
   | 'resendFiles'
   | 'imageDetail'
   | 'reasoning_effort'
+  | 'verbosity'
   | 'instructions'
   | 'additional_instructions'
   | 'append_current_datetime'
@@ -98,20 +96,26 @@ export type TEndpointOption = Pick<
 export type TEphemeralAgent = {
   mcp?: string[];
   web_search?: boolean;
+  file_search?: boolean;
   execute_code?: boolean;
 };
 
 export type TPayload = Partial<TMessage> &
   Partial<TEndpointOption> & {
     isContinued: boolean;
+    isRegenerate?: boolean;
     conversationId: string | null;
     messages?: TMessages;
     isTemporary: boolean;
     ephemeralAgent?: TEphemeralAgent | null;
+    editedContent?: {
+      index: number;
+      text: string;
+      type: 'text' | 'think';
+    } | null;
   };
 
 export type TSubmission = {
-  artifacts?: string;
   plugin?: TResPlugin;
   plugins?: TResPlugin[];
   userMessage: TMessage;
@@ -120,12 +124,16 @@ export type TSubmission = {
   isTemporary: boolean;
   messages: TMessage[];
   isRegenerate?: boolean;
-  isResubmission?: boolean;
   initialResponse?: TMessage;
   conversation: Partial<TConversation>;
   endpointOption: TEndpointOption;
   clientTimestamp?: string;
   ephemeralAgent?: TEphemeralAgent | null;
+  editedContent?: {
+    index: number;
+    text: string;
+    type: 'text' | 'think';
+  } | null;
 };
 
 export type EventSubmission = Omit<TSubmission, 'initialResponse'> & { initialResponse: TMessage };
@@ -133,7 +141,7 @@ export type EventSubmission = Omit<TSubmission, 'initialResponse'> & { initialRe
 export type TPluginAction = {
   pluginKey: string;
   action: 'install' | 'uninstall';
-  auth?: Partial<Record<string, string>>;
+  auth?: Partial<Record<string, string>> | null;
   isEntityTool?: boolean;
 };
 
@@ -143,7 +151,7 @@ export type TUpdateUserPlugins = {
   isEntityTool?: boolean;
   pluginKey: string;
   action: string;
-  auth?: Partial<Record<string, string | null>>;
+  auth?: Partial<Record<string, string | null>> | null;
 };
 
 // TODO `label` needs to be changed to the proper `TranslationKeys`
@@ -403,6 +411,14 @@ export type TVerify2FATempResponse = {
   token?: string;
   user?: TUser;
   message?: string;
+};
+
+/**
+ * Request for disabling 2FA.
+ */
+export type TDisable2FARequest = {
+  token?: string;
+  backupCode?: string;
 };
 
 /**

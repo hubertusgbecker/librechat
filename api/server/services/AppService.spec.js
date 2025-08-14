@@ -32,6 +32,25 @@ jest.mock('~/models', () => ({
 jest.mock('~/models/Role', () => ({
   updateAccessPermissions: jest.fn(),
 }));
+jest.mock('./Config', () => ({
+  setCachedTools: jest.fn(),
+  getCachedTools: jest.fn().mockResolvedValue({
+    ExampleTool: {
+      type: 'function',
+      function: {
+        description: 'Example tool function',
+        name: 'exampleFunction',
+        parameters: {
+          type: 'object',
+          properties: {
+            param1: { type: 'string', description: 'An example parameter' },
+          },
+          required: ['param1'],
+        },
+      },
+    },
+  }),
+}));
 jest.mock('./ToolService', () => ({
   loadAndFormatTools: jest.fn().mockReturnValue({
     ExampleTool: {
@@ -121,22 +140,9 @@ describe('AppService', () => {
         sidePanel: true,
         presets: true,
       }),
+      mcpConfig: null,
       turnstileConfig: mockedTurnstileConfig,
       modelSpecs: undefined,
-      availableTools: {
-        ExampleTool: {
-          type: 'function',
-          function: expect.objectContaining({
-            description: 'Example tool function',
-            name: 'exampleFunction',
-            parameters: expect.objectContaining({
-              type: 'object',
-              properties: expect.any(Object),
-              required: expect.arrayContaining(['param1']),
-            }),
-          }),
-        },
-      },
       paths: expect.anything(),
       ocr: expect.anything(),
       imageOutputType: expect.any(String),
@@ -146,12 +152,14 @@ describe('AppService', () => {
       filteredTools: undefined,
       includedTools: undefined,
       webSearch: {
+        safeSearch: 1,
+        jinaApiKey: '${JINA_API_KEY}',
         cohereApiKey: '${COHERE_API_KEY}',
+        serperApiKey: '${SERPER_API_KEY}',
+        searxngApiKey: '${SEARXNG_API_KEY}',
         firecrawlApiKey: '${FIRECRAWL_API_KEY}',
         firecrawlApiUrl: '${FIRECRAWL_API_URL}',
-        jinaApiKey: '${JINA_API_KEY}',
-        safeSearch: 1,
-        serperApiKey: '${SERPER_API_KEY}',
+        searxngInstanceUrl: '${SEARXNG_INSTANCE_URL}',
       },
       memory: undefined,
       agents: {
@@ -223,14 +231,41 @@ describe('AppService', () => {
 
   it('should load and format tools accurately with defined structure', async () => {
     const { loadAndFormatTools } = require('./ToolService');
+    const { setCachedTools, getCachedTools } = require('./Config');
+
     await AppService(app);
 
     expect(loadAndFormatTools).toHaveBeenCalledWith({
+      adminFilter: undefined,
+      adminIncluded: undefined,
       directory: expect.anything(),
     });
 
-    expect(app.locals.availableTools.ExampleTool).toBeDefined();
-    expect(app.locals.availableTools.ExampleTool).toEqual({
+    // Verify setCachedTools was called with the tools
+    expect(setCachedTools).toHaveBeenCalledWith(
+      {
+        ExampleTool: {
+          type: 'function',
+          function: {
+            description: 'Example tool function',
+            name: 'exampleFunction',
+            parameters: {
+              type: 'object',
+              properties: {
+                param1: { type: 'string', description: 'An example parameter' },
+              },
+              required: ['param1'],
+            },
+          },
+        },
+      },
+      { isGlobal: true },
+    );
+
+    // Verify we can retrieve the tools from cache
+    const cachedTools = await getCachedTools({ includeGlobal: true });
+    expect(cachedTools.ExampleTool).toBeDefined();
+    expect(cachedTools.ExampleTool).toEqual({
       type: 'function',
       function: {
         description: 'Example tool function',
@@ -508,6 +543,206 @@ describe('AppService', () => {
     expect(process.env.IMPORT_USER_MAX).toEqual('initialUserMax');
     expect(process.env.IMPORT_USER_WINDOW).toEqual('initialUserWindow');
   });
+
+  it('should correctly configure endpoint with titlePrompt, titleMethod, and titlePromptTemplate', async () => {
+    require('./Config/loadCustomConfig').mockImplementationOnce(() =>
+      Promise.resolve({
+        endpoints: {
+          [EModelEndpoint.openAI]: {
+            titleConvo: true,
+            titleModel: 'gpt-3.5-turbo',
+            titleMethod: 'structured',
+            titlePrompt: 'Custom title prompt for conversation',
+            titlePromptTemplate: 'Summarize this conversation: {{conversation}}',
+          },
+          [EModelEndpoint.assistants]: {
+            titleMethod: 'functions',
+            titlePrompt: 'Generate a title for this assistant conversation',
+            titlePromptTemplate: 'Assistant conversation template: {{messages}}',
+          },
+          [EModelEndpoint.azureOpenAI]: {
+            groups: azureGroups,
+            titleConvo: true,
+            titleMethod: 'completion',
+            titleModel: 'gpt-4',
+            titlePrompt: 'Azure title prompt',
+            titlePromptTemplate: 'Azure conversation: {{context}}',
+          },
+        },
+      }),
+    );
+
+    await AppService(app);
+
+    // Check OpenAI endpoint configuration
+    expect(app.locals).toHaveProperty(EModelEndpoint.openAI);
+    expect(app.locals[EModelEndpoint.openAI]).toEqual(
+      expect.objectContaining({
+        titleConvo: true,
+        titleModel: 'gpt-3.5-turbo',
+        titleMethod: 'structured',
+        titlePrompt: 'Custom title prompt for conversation',
+        titlePromptTemplate: 'Summarize this conversation: {{conversation}}',
+      }),
+    );
+
+    // Check Assistants endpoint configuration
+    expect(app.locals).toHaveProperty(EModelEndpoint.assistants);
+    expect(app.locals[EModelEndpoint.assistants]).toMatchObject({
+      titleMethod: 'functions',
+      titlePrompt: 'Generate a title for this assistant conversation',
+      titlePromptTemplate: 'Assistant conversation template: {{messages}}',
+    });
+
+    // Check Azure OpenAI endpoint configuration
+    expect(app.locals).toHaveProperty(EModelEndpoint.azureOpenAI);
+    expect(app.locals[EModelEndpoint.azureOpenAI]).toEqual(
+      expect.objectContaining({
+        titleConvo: true,
+        titleMethod: 'completion',
+        titleModel: 'gpt-4',
+        titlePrompt: 'Azure title prompt',
+        titlePromptTemplate: 'Azure conversation: {{context}}',
+      }),
+    );
+  });
+
+  it('should configure Agent endpoint with title generation settings', async () => {
+    require('./Config/loadCustomConfig').mockImplementationOnce(() =>
+      Promise.resolve({
+        endpoints: {
+          [EModelEndpoint.agents]: {
+            disableBuilder: false,
+            titleConvo: true,
+            titleModel: 'gpt-4',
+            titleMethod: 'structured',
+            titlePrompt: 'Generate a descriptive title for this agent conversation',
+            titlePromptTemplate: 'Agent conversation summary: {{content}}',
+            recursionLimit: 15,
+            capabilities: [AgentCapabilities.tools, AgentCapabilities.actions],
+          },
+        },
+      }),
+    );
+
+    await AppService(app);
+
+    expect(app.locals).toHaveProperty(EModelEndpoint.agents);
+    expect(app.locals[EModelEndpoint.agents]).toMatchObject({
+      disableBuilder: false,
+      titleConvo: true,
+      titleModel: 'gpt-4',
+      titleMethod: 'structured',
+      titlePrompt: 'Generate a descriptive title for this agent conversation',
+      titlePromptTemplate: 'Agent conversation summary: {{content}}',
+      recursionLimit: 15,
+      capabilities: expect.arrayContaining([AgentCapabilities.tools, AgentCapabilities.actions]),
+    });
+  });
+
+  it('should handle missing title configuration options with defaults', async () => {
+    require('./Config/loadCustomConfig').mockImplementationOnce(() =>
+      Promise.resolve({
+        endpoints: {
+          [EModelEndpoint.openAI]: {
+            titleConvo: true,
+            // titlePrompt and titlePromptTemplate are not provided
+          },
+        },
+      }),
+    );
+
+    await AppService(app);
+
+    expect(app.locals).toHaveProperty(EModelEndpoint.openAI);
+    expect(app.locals[EModelEndpoint.openAI]).toMatchObject({
+      titleConvo: true,
+    });
+    // Check that the optional fields are undefined when not provided
+    expect(app.locals[EModelEndpoint.openAI].titlePrompt).toBeUndefined();
+    expect(app.locals[EModelEndpoint.openAI].titlePromptTemplate).toBeUndefined();
+    expect(app.locals[EModelEndpoint.openAI].titleMethod).toBeUndefined();
+  });
+
+  it('should correctly configure titleEndpoint when specified', async () => {
+    require('./Config/loadCustomConfig').mockImplementationOnce(() =>
+      Promise.resolve({
+        endpoints: {
+          [EModelEndpoint.openAI]: {
+            titleConvo: true,
+            titleModel: 'gpt-3.5-turbo',
+            titleEndpoint: EModelEndpoint.anthropic,
+            titlePrompt: 'Generate a concise title',
+          },
+          [EModelEndpoint.agents]: {
+            titleEndpoint: 'custom-provider',
+            titleMethod: 'structured',
+          },
+        },
+      }),
+    );
+
+    await AppService(app);
+
+    // Check OpenAI endpoint has titleEndpoint
+    expect(app.locals).toHaveProperty(EModelEndpoint.openAI);
+    expect(app.locals[EModelEndpoint.openAI]).toMatchObject({
+      titleConvo: true,
+      titleModel: 'gpt-3.5-turbo',
+      titleEndpoint: EModelEndpoint.anthropic,
+      titlePrompt: 'Generate a concise title',
+    });
+
+    // Check Agents endpoint has titleEndpoint
+    expect(app.locals).toHaveProperty(EModelEndpoint.agents);
+    expect(app.locals[EModelEndpoint.agents]).toMatchObject({
+      titleEndpoint: 'custom-provider',
+      titleMethod: 'structured',
+    });
+  });
+
+  it('should correctly configure all endpoint when specified', async () => {
+    require('./Config/loadCustomConfig').mockImplementationOnce(() =>
+      Promise.resolve({
+        endpoints: {
+          all: {
+            titleConvo: true,
+            titleModel: 'gpt-4o-mini',
+            titleMethod: 'structured',
+            titlePrompt: 'Default title prompt for all endpoints',
+            titlePromptTemplate: 'Default template: {{conversation}}',
+            titleEndpoint: EModelEndpoint.anthropic,
+            streamRate: 50,
+          },
+          [EModelEndpoint.openAI]: {
+            titleConvo: true,
+            titleModel: 'gpt-3.5-turbo',
+          },
+        },
+      }),
+    );
+
+    await AppService(app);
+
+    // Check that 'all' endpoint config is loaded
+    expect(app.locals).toHaveProperty('all');
+    expect(app.locals.all).toMatchObject({
+      titleConvo: true,
+      titleModel: 'gpt-4o-mini',
+      titleMethod: 'structured',
+      titlePrompt: 'Default title prompt for all endpoints',
+      titlePromptTemplate: 'Default template: {{conversation}}',
+      titleEndpoint: EModelEndpoint.anthropic,
+      streamRate: 50,
+    });
+
+    // Check that OpenAI endpoint has its own config
+    expect(app.locals).toHaveProperty(EModelEndpoint.openAI);
+    expect(app.locals[EModelEndpoint.openAI]).toMatchObject({
+      titleConvo: true,
+      titleModel: 'gpt-3.5-turbo',
+    });
+  });
 });
 
 describe('AppService updating app.locals and issuing warnings', () => {
@@ -535,7 +770,6 @@ describe('AppService updating app.locals and issuing warnings', () => {
 
     expect(app.locals).toBeDefined();
     expect(app.locals.paths).toBeDefined();
-    expect(app.locals.availableTools).toBeDefined();
     expect(app.locals.fileStrategy).toEqual(FileSources.local);
     expect(app.locals.socialLogins).toEqual(defaultSocialLogins);
     expect(app.locals.balance).toEqual(
@@ -568,7 +802,6 @@ describe('AppService updating app.locals and issuing warnings', () => {
 
     expect(app.locals).toBeDefined();
     expect(app.locals.paths).toBeDefined();
-    expect(app.locals.availableTools).toBeDefined();
     expect(app.locals.fileStrategy).toEqual(customConfig.fileStrategy);
     expect(app.locals.socialLogins).toEqual(customConfig.registration.socialLogins);
     expect(app.locals.balance).toEqual(customConfig.balance);

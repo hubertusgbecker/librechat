@@ -6,6 +6,10 @@ const originalEnv = {
 process.env.CREDS_KEY = '0123456789abcdef0123456789abcdef';
 process.env.CREDS_IV = '0123456789abcdef';
 
+jest.mock('~/server/services/Config', () => ({
+  getCachedTools: jest.fn(),
+}));
+
 const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
 const { agentSchema } = require('@librechat/data-schemas');
@@ -23,6 +27,7 @@ const {
   generateActionMetadataHash,
   revertAgentVersion,
 } = require('./Agent');
+const { getCachedTools } = require('~/server/services/Config');
 
 /**
  * @type {import('mongoose').Model<import('@librechat/data-schemas').IAgent>}
@@ -38,7 +43,7 @@ describe('models/Agent', () => {
       const mongoUri = mongoServer.getUri();
       Agent = mongoose.models.Agent || mongoose.model('Agent', agentSchema);
       await mongoose.connect(mongoUri);
-    });
+    }, 20000);
 
     afterAll(async () => {
       await mongoose.disconnect();
@@ -406,8 +411,9 @@ describe('models/Agent', () => {
     beforeAll(async () => {
       mongoServer = await MongoMemoryServer.create();
       const mongoUri = mongoServer.getUri();
+      Agent = mongoose.models.Agent || mongoose.model('Agent', agentSchema);
       await mongoose.connect(mongoUri);
-    });
+    }, 20000);
 
     afterAll(async () => {
       await mongoose.disconnect();
@@ -664,7 +670,7 @@ describe('models/Agent', () => {
       const mongoUri = mongoServer.getUri();
       Agent = mongoose.models.Agent || mongoose.model('Agent', agentSchema);
       await mongoose.connect(mongoUri);
-    });
+    }, 20000);
 
     afterAll(async () => {
       await mongoose.disconnect();
@@ -873,45 +879,31 @@ describe('models/Agent', () => {
       expect(emptyParamsAgent.model_parameters).toEqual({});
     });
 
-    test('should detect duplicate versions and reject updates', async () => {
-      const originalConsoleError = console.error;
-      console.error = jest.fn();
+    test('should not create new version for duplicate updates', async () => {
+      const authorId = new mongoose.Types.ObjectId();
+      const testCases = generateVersionTestCases();
 
-      try {
-        const authorId = new mongoose.Types.ObjectId();
-        const testCases = generateVersionTestCases();
+      for (const testCase of testCases) {
+        const testAgentId = `agent_${uuidv4()}`;
 
-        for (const testCase of testCases) {
-          const testAgentId = `agent_${uuidv4()}`;
+        await createAgent({
+          id: testAgentId,
+          provider: 'test',
+          model: 'test-model',
+          author: authorId,
+          ...testCase.initial,
+        });
 
-          await createAgent({
-            id: testAgentId,
-            provider: 'test',
-            model: 'test-model',
-            author: authorId,
-            ...testCase.initial,
-          });
+        const updatedAgent = await updateAgent({ id: testAgentId }, testCase.update);
+        expect(updatedAgent.versions).toHaveLength(2); // No new version created
 
-          await updateAgent({ id: testAgentId }, testCase.update);
+        // Update with duplicate data should succeed but not create a new version
+        const duplicateUpdate = await updateAgent({ id: testAgentId }, testCase.duplicate);
 
-          let error;
-          try {
-            await updateAgent({ id: testAgentId }, testCase.duplicate);
-          } catch (e) {
-            error = e;
-          }
+        expect(duplicateUpdate.versions).toHaveLength(2); // No new version created
 
-          expect(error).toBeDefined();
-          expect(error.message).toContain('Duplicate version');
-          expect(error.statusCode).toBe(409);
-          expect(error.details).toBeDefined();
-          expect(error.details.duplicateVersion).toBeDefined();
-
-          const agent = await getAgent({ id: testAgentId });
-          expect(agent.versions).toHaveLength(2);
-        }
-      } finally {
-        console.error = originalConsoleError;
+        const agent = await getAgent({ id: testAgentId });
+        expect(agent.versions).toHaveLength(2);
       }
     });
 
@@ -1087,20 +1079,13 @@ describe('models/Agent', () => {
       expect(secondUpdate.versions).toHaveLength(3);
 
       // Update without forceVersion and no changes should not create a version
-      let error;
-      try {
-        await updateAgent(
-          { id: agentId },
-          { tools: ['listEvents_action_test.com', 'createEvent_action_test.com'] },
-          { updatingUserId: authorId.toString(), forceVersion: false },
-        );
-      } catch (e) {
-        error = e;
-      }
+      const duplicateUpdate = await updateAgent(
+        { id: agentId },
+        { tools: ['listEvents_action_test.com', 'createEvent_action_test.com'] },
+        { updatingUserId: authorId.toString(), forceVersion: false },
+      );
 
-      expect(error).toBeDefined();
-      expect(error.message).toContain('Duplicate version');
-      expect(error.statusCode).toBe(409);
+      expect(duplicateUpdate.versions).toHaveLength(3); // No new version created
     });
 
     test('should handle isDuplicateVersion with arrays containing null/undefined values', async () => {
@@ -1326,7 +1311,7 @@ describe('models/Agent', () => {
       const mongoUri = mongoServer.getUri();
       Agent = mongoose.models.Agent || mongoose.model('Agent', agentSchema);
       await mongoose.connect(mongoUri);
-    });
+    }, 20000);
 
     afterAll(async () => {
       await mongoose.disconnect();
@@ -1508,7 +1493,7 @@ describe('models/Agent', () => {
       const mongoUri = mongoServer.getUri();
       Agent = mongoose.models.Agent || mongoose.model('Agent', agentSchema);
       await mongoose.connect(mongoUri);
-    });
+    }, 20000);
 
     afterAll(async () => {
       await mongoose.disconnect();
@@ -1546,6 +1531,12 @@ describe('models/Agent', () => {
     test('should test ephemeral agent loading logic', async () => {
       const { EPHEMERAL_AGENT_ID } = require('librechat-data-provider').Constants;
 
+      getCachedTools.mockResolvedValue({
+        tool1_mcp_server1: {},
+        tool2_mcp_server2: {},
+        another_tool: {},
+      });
+
       const mockReq = {
         user: { id: 'user123' },
         body: {
@@ -1554,15 +1545,6 @@ describe('models/Agent', () => {
             execute_code: true,
             web_search: true,
             mcp: ['server1', 'server2'],
-          },
-        },
-        app: {
-          locals: {
-            availableTools: {
-              tool1_mcp_server1: {},
-              tool2_mcp_server2: {},
-              another_tool: {},
-            },
           },
         },
       };
@@ -1657,6 +1639,8 @@ describe('models/Agent', () => {
     test('should handle ephemeral agent with no MCP servers', async () => {
       const { EPHEMERAL_AGENT_ID } = require('librechat-data-provider').Constants;
 
+      getCachedTools.mockResolvedValue({});
+
       const mockReq = {
         user: { id: 'user123' },
         body: {
@@ -1665,11 +1649,6 @@ describe('models/Agent', () => {
             execute_code: false,
             web_search: false,
             mcp: [],
-          },
-        },
-        app: {
-          locals: {
-            availableTools: {},
           },
         },
       };
@@ -1692,15 +1671,12 @@ describe('models/Agent', () => {
     test('should handle ephemeral agent with undefined ephemeralAgent in body', async () => {
       const { EPHEMERAL_AGENT_ID } = require('librechat-data-provider').Constants;
 
+      getCachedTools.mockResolvedValue({});
+
       const mockReq = {
         user: { id: 'user123' },
         body: {
           promptPrefix: 'Basic instructions',
-        },
-        app: {
-          locals: {
-            availableTools: {},
-          },
         },
       };
 
@@ -1734,6 +1710,13 @@ describe('models/Agent', () => {
         const { EPHEMERAL_AGENT_ID } = require('librechat-data-provider').Constants;
 
         const largeToolList = Array.from({ length: 100 }, (_, i) => `tool_${i}_mcp_server1`);
+        const availableTools = largeToolList.reduce((acc, tool) => {
+          acc[tool] = {};
+          return acc;
+        }, {});
+
+        getCachedTools.mockResolvedValue(availableTools);
+
         const mockReq = {
           user: { id: 'user123' },
           body: {
@@ -1742,14 +1725,6 @@ describe('models/Agent', () => {
               execute_code: true,
               web_search: true,
               mcp: ['server1'],
-            },
-          },
-          app: {
-            locals: {
-              availableTools: largeToolList.reduce((acc, tool) => {
-                acc[tool] = {};
-                return acc;
-              }, {}),
             },
           },
         };
@@ -1802,7 +1777,7 @@ describe('models/Agent', () => {
       const mongoUri = mongoServer.getUri();
       Agent = mongoose.models.Agent || mongoose.model('Agent', agentSchema);
       await mongoose.connect(mongoUri);
-    });
+    }, 20000);
 
     afterAll(async () => {
       await mongoose.disconnect();
@@ -2272,6 +2247,13 @@ describe('models/Agent', () => {
     test('should handle loadEphemeralAgent with malformed MCP tool names', async () => {
       const { EPHEMERAL_AGENT_ID } = require('librechat-data-provider').Constants;
 
+      getCachedTools.mockResolvedValue({
+        malformed_tool_name: {}, // No mcp delimiter
+        tool__server1: {}, // Wrong delimiter
+        tool_mcp_server1: {}, // Correct format
+        tool_mcp_server2: {}, // Different server
+      });
+
       const mockReq = {
         user: { id: 'user123' },
         body: {
@@ -2280,16 +2262,6 @@ describe('models/Agent', () => {
             execute_code: false,
             web_search: false,
             mcp: ['server1'],
-          },
-        },
-        app: {
-          locals: {
-            availableTools: {
-              malformed_tool_name: {}, // No mcp delimiter
-              tool__server1: {}, // Wrong delimiter
-              tool_mcp_server1: {}, // Correct format
-              tool_mcp_server2: {}, // Different server
-            },
           },
         },
       };
@@ -2357,7 +2329,7 @@ describe('models/Agent', () => {
       const mongoUri = mongoServer.getUri();
       Agent = mongoose.models.Agent || mongoose.model('Agent', agentSchema);
       await mongoose.connect(mongoUri);
-    });
+    }, 20000);
 
     afterAll(async () => {
       await mongoose.disconnect();
@@ -2407,11 +2379,18 @@ describe('models/Agent', () => {
         agent_ids: ['agent1', 'agent2'],
       });
 
-      await updateAgent({ id: agentId }, { agent_ids: ['agent1', 'agent2', 'agent3'] });
+      const updatedAgent = await updateAgent(
+        { id: agentId },
+        { agent_ids: ['agent1', 'agent2', 'agent3'] },
+      );
+      expect(updatedAgent.versions).toHaveLength(2);
 
-      await expect(
-        updateAgent({ id: agentId }, { agent_ids: ['agent1', 'agent2', 'agent3'] }),
-      ).rejects.toThrow('Duplicate version');
+      // Update with same agent_ids should succeed but not create a new version
+      const duplicateUpdate = await updateAgent(
+        { id: agentId },
+        { agent_ids: ['agent1', 'agent2', 'agent3'] },
+      );
+      expect(duplicateUpdate.versions).toHaveLength(2); // No new version created
     });
 
     test('should handle agent_ids field alongside other fields', async () => {
@@ -2550,9 +2529,10 @@ describe('models/Agent', () => {
       expect(updated.versions).toHaveLength(2);
       expect(updated.agent_ids).toEqual([]);
 
-      await expect(updateAgent({ id: agentId }, { agent_ids: [] })).rejects.toThrow(
-        'Duplicate version',
-      );
+      // Update with same empty agent_ids should succeed but not create a new version
+      const duplicateUpdate = await updateAgent({ id: agentId }, { agent_ids: [] });
+      expect(duplicateUpdate.versions).toHaveLength(2); // No new version created
+      expect(duplicateUpdate.agent_ids).toEqual([]);
     });
 
     test('should handle agent without agent_ids field', async () => {

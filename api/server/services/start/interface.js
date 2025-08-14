@@ -2,11 +2,11 @@ const {
   SystemRoles,
   Permissions,
   PermissionTypes,
-  isMemoryEnabled,
   removeNullishValues,
 } = require('librechat-data-provider');
+const { logger } = require('@librechat/data-schemas');
+const { isMemoryEnabled } = require('@librechat/api');
 const { updateAccessPermissions } = require('~/models/Role');
-const { logger } = require('~/config');
 
 /**
  * Loads the default interface object.
@@ -41,6 +41,7 @@ async function loadDefaultInterface(config, configDefaults, roleName = SystemRol
     sidePanel: interfaceConfig?.sidePanel ?? defaults.sidePanel,
     privacyPolicy: interfaceConfig?.privacyPolicy ?? defaults.privacyPolicy,
     termsOfService: interfaceConfig?.termsOfService ?? defaults.termsOfService,
+    mcpServers: interfaceConfig?.mcpServers ?? defaults.mcpServers,
     bookmarks: interfaceConfig?.bookmarks ?? defaults.bookmarks,
     memories: shouldDisableMemories ? false : (interfaceConfig?.memories ?? defaults.memories),
     prompts: interfaceConfig?.prompts ?? defaults.prompts,
@@ -49,6 +50,7 @@ async function loadDefaultInterface(config, configDefaults, roleName = SystemRol
     temporaryChat: interfaceConfig?.temporaryChat ?? defaults.temporaryChat,
     runCode: interfaceConfig?.runCode ?? defaults.runCode,
     webSearch: interfaceConfig?.webSearch ?? defaults.webSearch,
+    fileSearch: interfaceConfig?.fileSearch ?? defaults.fileSearch,
     customWelcome: interfaceConfig?.customWelcome ?? defaults.customWelcome,
   });
 
@@ -64,6 +66,7 @@ async function loadDefaultInterface(config, configDefaults, roleName = SystemRol
     [PermissionTypes.TEMPORARY_CHAT]: { [Permissions.USE]: loadedInterface.temporaryChat },
     [PermissionTypes.RUN_CODE]: { [Permissions.USE]: loadedInterface.runCode },
     [PermissionTypes.WEB_SEARCH]: { [Permissions.USE]: loadedInterface.webSearch },
+    [PermissionTypes.FILE_SEARCH]: { [Permissions.USE]: loadedInterface.fileSearch },
   });
   await updateAccessPermissions(SystemRoles.ADMIN, {
     [PermissionTypes.PROMPTS]: { [Permissions.USE]: loadedInterface.prompts },
@@ -77,6 +80,7 @@ async function loadDefaultInterface(config, configDefaults, roleName = SystemRol
     [PermissionTypes.TEMPORARY_CHAT]: { [Permissions.USE]: loadedInterface.temporaryChat },
     [PermissionTypes.RUN_CODE]: { [Permissions.USE]: loadedInterface.runCode },
     [PermissionTypes.WEB_SEARCH]: { [Permissions.USE]: loadedInterface.webSearch },
+    [PermissionTypes.FILE_SEARCH]: { [Permissions.USE]: loadedInterface.fileSearch },
   });
 
   let i = 0;

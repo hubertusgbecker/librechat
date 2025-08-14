@@ -1,8 +1,8 @@
 import React, { useState, useRef, useMemo } from 'react';
+import { Skeleton } from '@librechat/client';
 import { LazyLoadImage } from 'react-lazy-load-image-component';
 import { cn, scaleImage } from '~/utils';
 import DialogImage from './DialogImage';
-import { Skeleton } from '~/components';
 
 const Image = ({
   imagePath,
@@ -46,13 +46,33 @@ const Image = ({
     [placeholderDimensions, height, width],
   );
 
-  const downloadImage = () => {
-    const link = document.createElement('a');
-    link.href = imagePath;
-    link.download = altText;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const downloadImage = async () => {
+    try {
+      const response = await fetch(imagePath);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch image: ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = altText || 'image.png';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Download failed:', error);
+      const link = document.createElement('a');
+      link.href = imagePath;
+      link.download = altText || 'image.png';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
   };
 
   return (
